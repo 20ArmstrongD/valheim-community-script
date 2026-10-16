@@ -1,6 +1,6 @@
 # Valheim Dedicated Server for Community Scripts
 
-A local development candidate for an amd64, unprivileged Proxmox VE LXC running
+A development candidate for an amd64, unprivileged Proxmox VE LXC running
 the official stable Valheim Dedicated Server (Steam App ID `896660`). The shared
 Community Scripts Core creates the container; these scripts install the game
 directly, without Docker, nesting, device passthrough, or privileged-container requirements.
@@ -18,26 +18,55 @@ To publish this standalone development repository to your own GitHub account,
 follow [the GitHub setup instructions](docs/github-setup.md). Publishing the
 repository does not install anything on Proxmox or submit a Community Scripts PR.
 
-## Installation workflow
+## Install from the Proxmox node shell
 
-1. Review [upstream research and submission notes](docs/submission.md).
-2. Place `ct/valheim.sh` and `install/valheim-install.sh` in a DevScripts fork and
-   branch. Run the checks below, then publish that branch when ready for testing.
-3. On an **approved test Proxmox host**, use Core's fork/branch support:
+**Development build: use a fresh test LXC and a disposable world.** The installer
+has not yet passed real Proxmox/gameplay acceptance tests. This is an independent
+project using Community Scripts Core, not an official Community Scripts release.
+
+Open your **Proxmox node → Shell**, log in as root, and run:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/20ArmstrongD/valheim-community-script/main/ct/valheim.sh)"
+```
+
+Run this on the Proxmox node, not inside your existing game VM or an existing
+container. It invokes the Community Scripts wizard to create a new LXC and fetches
+`install/valheim-install.sh` from this same repository. Review the scripts before
+running a command that downloads code as root. The repository must be public for
+unauthenticated users to download it.
+
+1. Use the wizard to choose a new container ID, storage, networking and resources.
+2. Supply the server name, world name, password, visibility and crossplay settings
+   when prompted. Blank/noninteractive values use the defaults below; an omitted
+   password is randomly generated and stored in the protected configuration.
+3. Open the **new container's console**, run `valheim logs`, and wait for
+   `Game server connected`. Read the generated password locally as root from
+   `/etc/valheim/server.conf` if needed. Never paste that file into an issue.
+4. Configure the [game networking](#networking-and-joining) and test joining.
+
+After installation, management commands such as `valheim update`, `valheim backup`
+and `valheim restart` run **inside the new LXC**. They do not run on the Proxmox
+node or manage an existing VM.
+
+The command follows `main`, so future executions fetch its current contents.
+Once real-container testing passes, publish a tagged release and offer an install
+command pinned to that tag for repeatable distribution.
+
+## Testing a fork or preparing an upstream contribution
+
+Review [the submission notes](docs/submission.md) and run the local checks before
+testing another branch. Core supports an explicit application-script root:
 
    ```bash
    export COMMUNITY_SCRIPTS_URL='https://raw.githubusercontent.com/YOUR_ACCOUNT/DevScripts/YOUR_BRANCH'
    bash -c "$(curl -fsSL "$COMMUNITY_SCRIPTS_URL/ct/valheim.sh")"
    ```
 
-   Replace the account and branch. This repository has not been published; there
-   is no upstream `ct/valheim.sh` URL to run yet. Never run the guest installer
-   directly. Do not use an existing production container as a test target.
-4. Use the framework wizard for networking and resources. Inside the LXC, supply
-   the five server settings when prompted. Blank/noninteractive values use the
-   defaults below; an omitted password is randomly generated and stored only in
-   the protected configuration. Read it locally as root when joining.
-5. Run `valheim logs`; wait for `Game server connected`, then test joining.
+Replace the account, repository and branch as appropriate. Before submitting the
+two scripts to DevScripts, change `_CS_DEFAULT_URL` in `ct/valheim.sh` to
+`https://raw.githubusercontent.com/community-scripts/DevScripts/main`. Never run
+the guest installer directly or use an existing production container as a test target.
 
 Recommended starting allocation for 6–10 players: **4 vCPUs, 8192 MiB RAM,
 32 GiB disk**, Debian 13 amd64, unprivileged LXC. These are configurable starting

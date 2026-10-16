@@ -21,7 +21,9 @@ Research date: 2026-10-16. Remote documentation is mutable; recheck before submi
 
 The current engine lives in `community-scripts/core`; old examples using
 `misc/build.func` from the application repository are stale. The bootstrap uses
-Core's documented local/remote fallback and DevScripts as the application root.
+Core's documented local/remote fallback. This standalone distribution uses the
+owner's GitHub repository as the application root; change that default to
+DevScripts when preparing the upstream branch.
 There is no copied container creation logic. The installer uses Core lifecycle,
 prompt, random-password and download helpers. The helper sources have no SteamCMD
 installer; the official bootstrap is fetched through `curl_with_retry` and
@@ -89,6 +91,7 @@ required. Disclose the differences listed above and eligibility question.
 - Complete local lint/tests and approved fresh-LXC acceptance tests.
 - Rebase/copy the two installer files onto a current DevScripts branch; avoid
   changing the upstream root README, LICENSE or shared CI merely to add this app.
+- Change `_CS_DEFAULT_URL` to the DevScripts application root on that upstream branch.
 - Include focused app documentation/tests where maintainers prefer them; the
   local README, CI and license belong to this standalone development repository.
 - Obtain reviewer guidance on eligibility, non-root execution, maintenance

@@ -348,6 +348,30 @@ prompt_input_required() {
         password = next(field for field in metadata["app_vars"] if field["name"] == "var_valheim_password")
         self.assertTrue(password["secret"])
 
+    def test_ct_bootstrap_uses_distribution_origin_and_allows_override(self):
+        core = self.root / "mock-core/core"
+        core.mkdir(parents=True)
+        (core / "build.func").write_text('''
+COMMUNITY_SCRIPTS_URL="${COMMUNITY_SCRIPTS_URL:-$_CS_DEFAULT_URL}"
+header_info() { :; }
+variables() { :; }
+color() { :; }
+catch_errors() { :; }
+start() { :; }
+build_container() { echo "SCRIPT_ROOT=$COMMUNITY_SCRIPTS_URL"; }
+description() { :; }
+msg_ok() { :; }
+''')
+        expected = "https://raw.githubusercontent.com/20ArmstrongD/valheim-community-script/main"
+        for override in (None, "https://raw.githubusercontent.com/example/DevScripts/test-branch"):
+            env = {**self.env, "COMMUNITY_SCRIPTS_CORE_DIR": str(core.parent)}
+            env.pop("COMMUNITY_SCRIPTS_URL", None)
+            if override:
+                env["COMMUNITY_SCRIPTS_URL"] = override
+            result = subprocess.run([BASH, str(ROOT / "ct/valheim.sh")], env=env, capture_output=True, text=True)
+            self.assert_ok(result)
+            self.assertIn("SCRIPT_ROOT=" + (override or expected), result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
