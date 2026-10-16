@@ -22,7 +22,10 @@ stopped-state preservation, shutdown/backup/Steam failures, persistent inhibitio
 checksum rejection, restore round trip, link rejection, extraction failure,
 retention after success, concurrent operation rejection and automation opt-in.
 
-## Required real environment tests (not performed here)
+## Real environment acceptance checklist
+
+The owner reports a working Proxmox installation; see [the validation record](validation.md).
+Individual boxes below remain unchecked until their specific results are recorded.
 
 Only execute after explicit host approval. Use a new amd64 unprivileged LXC on a
 test Proxmox host, a dedicated test IP and disposable worlds. Record the Proxmox

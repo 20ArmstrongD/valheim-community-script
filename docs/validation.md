@@ -1,4 +1,18 @@
-# Local validation record
+# Validation record
+
+## Reported Proxmox and CI validation
+
+The project owner reports that GitHub Actions validation passes and that the
+Community Script works as intended in their Proxmox environment. The CI output
+shared during development shows all 29 behavioral tests passing; subsequent
+ShellCheck configuration fixes were followed by a reported successful workflow.
+
+The Proxmox version, template/build identifiers and results for each gameplay,
+crossplay, reboot, update and restoration check have not been recorded. The
+[acceptance checklist](testing.md) remains available to document those details;
+unchecked items do not negate the owner's reported successful installation.
+
+## Initial local development checks
 
 Date: 2026-10-16. Environment: macOS (Darwin), Bash 3.2.57, Python 3.14.
 No Proxmox host, production VM, Steam login or game download was used.
@@ -24,6 +38,6 @@ been committed or pushed, and no pull request had been opened. Subsequent GitHub
 repository preparation uses `main`; these results describe the implementation
 checks, not its publishing state.
 
-This is a development candidate, not a claim of production readiness or upstream
-acceptance. Complete [the real environment checklist](testing.md) and replace
-this record with actual results before submission.
+The table above preserves the initial local results. The newer owner-reported
+results are recorded at the top. These reports do not imply upstream acceptance;
+record detailed environment and acceptance evidence before submission.

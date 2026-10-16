@@ -5,10 +5,11 @@ the official stable Valheim Dedicated Server (Steam App ID `896660`). The shared
 Community Scripts Core creates the container; these scripts install the game
 directly, without Docker, nesting, device passthrough, or privileged-container requirements.
 
-**Status:** development; not yet verified on Proxmox. Local tests use mocked OS
-services and SteamCMD with real filesystem archives. See [testing](docs/testing.md).
-No existing VM is inspected, changed, stopped, or migrated. Use fresh containers
-and disposable worlds for all development.
+**Status:** the project owner has validated the installer working on Proxmox, and
+GitHub Actions validation passes. See the [setup walkthrough](docs/setup.md) to
+install your own server and the [validation record](docs/validation.md) for the
+scope of reported testing. No existing VM is inspected, changed, stopped, or
+migrated. Use fresh containers and disposable worlds for development.
 
 The installer is MIT licensed. Valheim and SteamCMD retain their respective
 licenses; game binaries are downloaded from Valve, never redistributed here.
@@ -20,15 +21,17 @@ repository does not install anything on Proxmox or submit a Community Scripts PR
 
 ## Install from the Proxmox node shell
 
-**Development build: use a fresh test LXC and a disposable world.** The installer
-has not yet passed real Proxmox/gameplay acceptance tests. This is an independent
-project using Community Scripts Core, not an official Community Scripts release.
+This is an independent project using Community Scripts Core, not an official
+Community Scripts release. It creates a new LXC for your Valheim server.
 
 Open your **Proxmox node → Shell**, log in as root, and run:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/20ArmstrongD/valheim-community-script/main/ct/valheim.sh)"
 ```
+
+New to Proxmox? Follow the [step-by-step setup guide](docs/setup.md), including
+where to paste the command, the settings to choose, and how to join afterward.
 
 Run this on the Proxmox node, not inside your existing game VM or an existing
 container. It invokes the Community Scripts wizard to create a new LXC and fetches
@@ -50,8 +53,8 @@ and `valheim restart` run **inside the new LXC**. They do not run on the Proxmox
 node or manage an existing VM.
 
 The command follows `main`, so future executions fetch its current contents.
-Once real-container testing passes, publish a tagged release and offer an install
-command pinned to that tag for repeatable distribution.
+A tagged release can provide an install command pinned to a tested version for
+repeatable distribution.
 
 ## Testing a fork or preparing an upstream contribution
 
