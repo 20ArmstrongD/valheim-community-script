@@ -1,0 +1,4 @@
+shell=bash
+external-sources=false
+# Community Scripts injects these sources at runtime.
+disable=SC1090,SC1091

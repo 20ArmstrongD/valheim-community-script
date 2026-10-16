@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.tools/
+.test-output/
+*.tar.gz
+*.sha256
+*.db
+*.fwl
+server.conf
+*.creds
+*.log
+.env
+.env.*
+*.vars
+*.key
+*.pem
+.DS_Store

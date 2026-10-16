@@ -1,0 +1,24 @@
+name: Validate Valheim scripts
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install lint dependency
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Syntax, behavioral tests, and ShellCheck
+        run: bash tools/check.sh
+      - name: Verify generated systemd units
+        run: |
+          python3 tools/extract-runtime.py /tmp/valheim-units
+          sudo install -d /opt/valheim /var/lib/valheim /etc/valheim /usr/local/libexec
+          sudo useradd --system --user-group --home-dir /var/lib/valheim --shell /usr/sbin/nologin valheim
+          sudo install -m 755 /tmp/valheim-units/valheim-launch /usr/local/libexec/valheim-launch
+          sudo install -m 755 /tmp/valheim-units/valheim-auto-update /usr/local/libexec/valheim-auto-update
+          sudo install -m 755 /tmp/valheim-units/valheim /usr/local/bin/valheim
+          systemd-analyze verify /tmp/valheim-units/*.service /tmp/valheim-units/*.timer

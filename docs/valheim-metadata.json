@@ -1,0 +1,130 @@
+{
+  "name": "Valheim",
+  "slug": "valheim",
+  "categories": [
+    24
+  ],
+  "date_created": "2026-10-16",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "interface_port": null,
+  "documentation": "https://www.valheimgame.com/support/a-guide-to-dedicated-servers/",
+  "website": "https://www.valheimgame.com/",
+  "repository": "https://www.valheimgame.com/",
+  "architectures": [
+    "amd64"
+  ],
+  "platforms": [
+    "pve"
+  ],
+  "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/valheim.webp",
+  "description": "Official Steam-distributed Valheim dedicated server with crossplay, protected world saves, backups and optional automatic updates.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/valheim.sh",
+      "config_path": "/etc/valheim/server.conf",
+      "resources": {
+        "cpu": 4,
+        "ram": 8192,
+        "hdd": 32,
+        "os": "Debian",
+        "version": "13"
+      }
+    }
+  ],
+  "default_credentials": {
+    "username": null,
+    "password": null
+  },
+  "app_vars": [
+    {
+      "name": "var_valheim_name",
+      "label": "Server name",
+      "type": "text",
+      "default": "Valheim Community"
+    },
+    {
+      "name": "var_valheim_world",
+      "label": "World name",
+      "type": "text",
+      "default": "Dedicated"
+    },
+    {
+      "name": "var_valheim_password",
+      "label": "Server password",
+      "type": "password",
+      "secret": true,
+      "required": false
+    },
+    {
+      "name": "var_valheim_public",
+      "label": "Visibility (0 private, 1 listed)",
+      "type": "number",
+      "default": 1
+    },
+    {
+      "name": "var_valheim_crossplay",
+      "label": "Crossplay (0 off, 1 on)",
+      "type": "number",
+      "default": 1
+    },
+    {
+      "name": "var_valheim_port",
+      "label": "Base UDP port",
+      "type": "number",
+      "default": 2456
+    },
+    {
+      "name": "var_valheim_saveinterval",
+      "label": "World save interval (seconds)",
+      "type": "number",
+      "default": 1800
+    },
+    {
+      "name": "var_valheim_backups",
+      "label": "Built-in world backup count",
+      "type": "number",
+      "default": 6
+    },
+    {
+      "name": "var_valheim_backupshort",
+      "label": "Built-in short backup interval (seconds)",
+      "type": "number",
+      "default": 7200
+    },
+    {
+      "name": "var_valheim_backuplong",
+      "label": "Built-in long backup interval (seconds)",
+      "type": "number",
+      "default": 43200
+    },
+    {
+      "name": "var_valheim_retention",
+      "label": "Filesystem archive retention count",
+      "type": "number",
+      "default": 14
+    },
+    {
+      "name": "var_valheim_autoupdate",
+      "label": "Automatic updates (0 off, 1 on)",
+      "type": "number",
+      "default": 0
+    }
+  ],
+  "notes": [
+    {
+      "type": "warning",
+      "text": "Development candidate; fresh-LXC testing and maintainer eligibility review are pending."
+    },
+    {
+      "type": "info",
+      "text": "Uses UDP ports 2456-2457 by default. Crossplay uses the PlayFab relay backend."
+    },
+    {
+      "type": "info",
+      "text": "Generated server password is stored in /etc/valheim/server.conf and is never printed by installation."
+    }
+  ]
+}
