@@ -16,5 +16,6 @@ if ! command -v shellcheck >/dev/null; then
   echo "ShellCheck is required for the complete check. Install it and rerun tools/check.sh." >&2
   exit 1
 fi
-shellcheck ct/valheim.sh install/valheim-install.sh tools/check.sh
-shellcheck "$output/valheim-config" "$output/valheim-launch" "$output/valheim" "$output/valheim-auto-update"
+# Generated files live outside the repository, so config discovery cannot find it.
+shellcheck --rcfile "$PWD/.shellcheckrc" ct/valheim.sh install/valheim-install.sh tools/check.sh
+shellcheck --rcfile "$PWD/.shellcheckrc" "$output/valheim-config" "$output/valheim-launch" "$output/valheim" "$output/valheim-auto-update"
