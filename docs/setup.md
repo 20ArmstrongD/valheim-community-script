@@ -145,6 +145,13 @@ Follow the [backup and restore guide](backup-restore.md) for verification,
 retention, restoring worlds and recovering from an interrupted update. Valheim's
 built-in world backups and Proxmox guest backups are separate protection layers.
 
+## 9. Choose your own world rules
+
+Once players can connect, use the [optional customization guide](customization.md)
+for portal materials, difficulty presets, resources, raids, access lists and other
+server-owner choices. None of those examples are enabled automatically. Back up
+before changing a world and verify the specific change in-game afterward.
+
 ## If setup does not complete
 
 Inspect the failed command's error and the new container's console. If the game

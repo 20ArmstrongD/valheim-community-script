@@ -79,6 +79,11 @@ only Debian 13 is the initial test target. ARM64 and Alpine are unsupported.
 
 ## Configuration
 
+For optional world rules, portal materials, difficulty, resource drops, raids,
+admin/access lists and maintenance choices, see the
+[server customization guide](docs/customization.md). The installer leaves those
+choices to the owner; examples are not applied automatically.
+
 Edit `/etc/valheim/server.conf` as root, then run `valheim check-config` and
 `valheim restart`. File owner/group must be `root:valheim`, mode `0640`;
 `/etc/valheim` is `root:valheim` mode `0750`. The service account has no login shell.
