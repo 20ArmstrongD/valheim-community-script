@@ -4,6 +4,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 output=$(mktemp -d)
 trap 'rm -rf "$output"' EXIT
 python3 tools/extract-runtime.py "$output"
+# ShellCheck searches beside each script, including those extracted under /tmp.
+cp .shellcheckrc "$output/.shellcheckrc"
 bash -n ct/valheim.sh
 bash -n install/valheim-install.sh
 for script in "$output"/*; do
@@ -16,6 +18,5 @@ if ! command -v shellcheck >/dev/null; then
   echo "ShellCheck is required for the complete check. Install it and rerun tools/check.sh." >&2
   exit 1
 fi
-# Generated files live outside the repository, so config discovery cannot find it.
-shellcheck --rcfile "$PWD/.shellcheckrc" ct/valheim.sh install/valheim-install.sh tools/check.sh
-shellcheck --rcfile "$PWD/.shellcheckrc" "$output/valheim-config" "$output/valheim-launch" "$output/valheim" "$output/valheim-auto-update"
+shellcheck ct/valheim.sh install/valheim-install.sh tools/check.sh
+shellcheck "$output/valheim-config" "$output/valheim-launch" "$output/valheim" "$output/valheim-auto-update"
