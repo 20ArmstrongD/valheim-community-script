@@ -1,5 +1,20 @@
 # Validation record
 
+## Optional migration development (2026-10-17)
+
+Migration was developed with synthetic local fixtures only. The full suite now
+contains the original 29 installer/management tests plus 23 migration tests.
+Migration coverage includes multi-world archives and built-in backups, access
+lists, five configuration files, static translation without source credentials,
+dry-run, SSH command construction/streaming, package/assembly integrity,
+quarantine, idempotent imports/retries, rename failure recovery and rollback.
+
+No production VM was contacted, inspected, stopped or migrated. SSH, systemd,
+Steam and package downloads were mocked; ZIP/tar extraction, hashing and
+transaction filesystem operations used real disposable local files. Real
+Steam/BepInEx installation and plugin/gameplay compatibility remain unverified.
+ShellCheck is unavailable locally and must be run by CI.
+
 ## Reported Proxmox and CI validation
 
 The project owner reports that GitHub Actions validation passes and that the

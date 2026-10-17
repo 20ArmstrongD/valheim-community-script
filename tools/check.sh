@@ -8,6 +8,8 @@ python3 tools/extract-runtime.py "$output"
 cp .shellcheckrc "$output/.shellcheckrc"
 bash -n ct/valheim.sh
 bash -n install/valheim-install.sh
+bash -n migration/install.sh
+bash -n migration/cli-hooks.sh
 for script in "$output"/*; do
   if [[ "$(head -n 1 "$script")" == '#!/usr/bin/env bash' ]]; then
     bash -n "$script"
@@ -18,5 +20,5 @@ if ! command -v shellcheck >/dev/null; then
   echo "ShellCheck is required for the complete check. Install it and rerun tools/check.sh." >&2
   exit 1
 fi
-shellcheck ct/valheim.sh install/valheim-install.sh tools/check.sh
+shellcheck ct/valheim.sh install/valheim-install.sh tools/check.sh migration/install.sh migration/cli-hooks.sh
 shellcheck "$output/valheim-config" "$output/valheim-launch" "$output/valheim" "$output/valheim-auto-update"

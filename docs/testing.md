@@ -14,13 +14,17 @@ The harness rewrites fixed production paths into a temporary directory and mocks
 root identity/metadata, systemd, SteamCMD, account switching and package operations.
 It uses actual Bash, tar/gzip, SHA-256, file content comparisons and advisory locks.
 No production runtime accepts a test-root environment override. Tests do not need
-root privileges. Python is used only by development tooling, not installed in the LXC.
+root privileges. Python is used by development tooling and the optional migration
+add-on; the normal fresh installer does not add a Python dependency.
 
 Covered: strict literal configuration, invalid/missing/duplicate keys, permission
 checks, argument boundaries, stable Steam command, stop/backup/update/start order,
 stopped-state preservation, shutdown/backup/Steam failures, persistent inhibition,
 checksum rejection, restore round trip, link rejection, extraction failure,
 retention after success, concurrent operation rejection and automation opt-in.
+
+Optional migration coverage and its separate integration requirements are
+documented in [the migration guide](migration.md#development-validation).
 
 ## Real environment acceptance checklist
 

@@ -1,0 +1,23 @@
+{
+  "tested_valheim_build_id": "REPLACE_WITH_TESTED_STEAM_BUILD_ID",
+  "compatibility_confirmed": false,
+  "bepinex": {
+    "id": "denikson-BepInExPack_Valheim-5.4.2351",
+    "sha256": "REPLACE_WITH_REVIEWED_PACKAGE_SHA256",
+    "reviewed": false
+  },
+  "plugins": [
+    {
+      "id": "JereKuusela-Server_devcommands-1.115.0",
+      "sha256": "REPLACE_WITH_REVIEWED_PACKAGE_SHA256",
+      "reviewed": false,
+      "assemblies": [
+        {
+          "path": "REPLACE_WITH_EXACT_ASSEMBLY_PATH_INSIDE_PACKAGE.dll",
+          "sha256": "REPLACE_WITH_FRESH_ASSEMBLY_SHA256",
+          "source_sha256": "REPLACE_WITH_SOURCE_ASSEMBLY_SHA256_FROM_DRY_RUN"
+        }
+      ]
+    }
+  ]
+}

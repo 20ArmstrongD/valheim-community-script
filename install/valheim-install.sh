@@ -187,6 +187,9 @@ set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 umask 0077
 source /usr/local/libexec/valheim-config
+if [[ -f /usr/local/libexec/valheim-migration-hooks ]]; then
+  source /usr/local/libexec/valheim-migration-hooks
+fi
 
 usage() {
   echo "Usage: valheim {update|restart|start|stop|status|logs|backup|restore ARCHIVE|check-config}"

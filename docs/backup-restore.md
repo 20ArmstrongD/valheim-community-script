@@ -1,5 +1,9 @@
 # Backup, restoration and recovery
 
+For full destination rollback after an optional VM import, including the prior
+game/mod tree and launcher, use the [migration recovery procedure](migration.md#recovery-and-rollback).
+The archive commands below protect worlds/configuration, not executable mod trees.
+
 All commands here run as root **inside the newly created Valheim LXC**. Never run
 these procedures against an existing production VM as part of testing.
 

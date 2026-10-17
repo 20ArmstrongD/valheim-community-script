@@ -84,6 +84,11 @@ admin/access lists and maintenance choices, see the
 [server customization guide](docs/customization.md). The installer leaves those
 choices to the owner; examples are not applied automatically.
 
+Moving an existing Linux server? The optional [VM-to-LXC migration guide](docs/migration.md)
+covers stopped-source snapshots, SSH/local imports, reviewed BepInEx/plugins and
+rollback. It is a separate add-on; fresh installs remain vanilla and do not
+automatically connect to or alter an existing VM.
+
 Edit `/etc/valheim/server.conf` as root, then run `valheim check-config` and
 `valheim restart`. File owner/group must be `root:valheim`, mode `0640`;
 `/etc/valheim` is `root:valheim` mode `0750`. The service account has no login shell.
