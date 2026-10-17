@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in, fail-closed Valheim migration. Never sources imported shell or units."""
 import argparse
+from contextlib import contextmanager
 import fcntl
 import getpass
 import hashlib
@@ -17,12 +18,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.parse
-import urllib.request
+import time
 import zipfile
 
 LIMIT = 32 * 1024**3
 FILE_LIMIT = 100000
+PACKAGE_LIMIT = 128 * 1024**2
 CHUNKED_WORLD_VERSIONS = frozenset({40, 41, 42})
 SOURCE_DEFAULTS = {"port": "2456", "public": "1", "crossplay": "0", "saveinterval": "1800",
                    "world_backups": "4", "backupshort": "7200", "backuplong": "43200"}
@@ -444,19 +445,101 @@ def package_zip(path, expected, destination):
     return json.loads((destination / "manifest.json").read_text())
 
 
+def package_identity(package):
+    require(re.fullmatch(r"[A-Za-z0-9_]+-[A-Za-z0-9_]+-[0-9]+\.[0-9]+\.[0-9]+", package.get("id", "")), "Invalid pinned Thunderstore package ID.")
+    require(re.fullmatch(r"[0-9a-f]{64}", package.get("sha256", "")), "Pinned package SHA-256 required.")
+    return package["id"].split("-")
+
+
 def download_package(package, target):
-    require(re.fullmatch(r"[A-Za-z0-9_]+-[A-Za-z0-9_]+-[0-9]+\.[0-9]+\.[0-9]+", package["id"]), "Invalid pinned Thunderstore package ID.")
-    require(re.fullmatch(r"[0-9a-f]{64}", package["sha256"]), "Pinned package SHA-256 required.")
-    owner, name, version = package["id"].split("-")
+    owner, name, version = package_identity(package)
     url = f"https://thunderstore.io/package/download/{owner}/{name}/{version}/"
-    with urllib.request.urlopen(url, timeout=60) as reader, target.open("xb") as writer:
-        require(urllib.parse.urlparse(reader.url).scheme == "https", "Insecure package redirect.")
-        total = 0
-        while chunk := reader.read(1024 * 1024):
-            total += len(chunk)
-            require(total <= 128 * 1024**2, "Package download limit exceeded.")
-            writer.write(chunk)
-    require(digest(target) == package["sha256"], "Downloaded package hash mismatch.")
+    curl = shutil.which("curl")
+    require(curl, f"stage=mod-download package={package['id']}: curl unavailable; install curl or use --mod-package-dir.")
+    require(not target.exists(), "Package output already exists.")
+    log = target.with_suffix(".download.log")
+    partial = target.with_suffix(".partial")
+    # Disable user curl configuration; no shell, credentials, headers or insecure TLS options.
+    command = [curl, "--disable", "--silent", "--show-error", "--fail", "--location",
+               "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5",
+               "--connect-timeout", "15", "--max-time", "120", "--max-filesize", str(PACKAGE_LIMIT),
+               "--write-out", "%{stderr}\nHTTP_STATUS=%{http_code}\n", "--url", url]
+    try:
+        with log.open("xb") as diagnostics:
+            log.chmod(0o600)
+            for attempt in range(3):
+                diagnostics.write(f"stage=mod-download package={package['id']} url={url} attempt={attempt + 1}\n".encode())
+                diagnostics.flush()
+                attempt_offset = diagnostics.tell()
+                with partial.open("wb") as writer:
+                    partial.chmod(0o600)
+                    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=diagnostics)
+                    try:
+                        total = 0
+                        while chunk := process.stdout.read(64 * 1024):
+                            total += len(chunk)
+                            require(total <= PACKAGE_LIMIT, f"stage=mod-download package={package['id']}: package exceeds size limit; log={log}")
+                            writer.write(chunk)
+                        code = process.wait(timeout=135)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait()
+                        process.stdout.close()
+                statuses = re.findall(r"HTTP_STATUS=([0-9]{3})", log.read_bytes()[attempt_offset:].decode(errors="replace"))
+                status = statuses[-1] if statuses else "unknown"
+                if code == 0 and status.startswith("2"):
+                    require(digest(partial) == package["sha256"],
+                            f"stage=mod-download package={package['id']} url={url} HTTP={status}: SHA-256 mismatch; log={log}")
+                    durable_replace(partial, target)
+                    return
+                if attempt == 2 or status in {"403", "404"} or code not in {5, 6, 7, 18, 22, 28, 52, 55, 56}:
+                    raise MigrationError(f"stage=mod-download package={package['id']} url={url} HTTP={status} curl_exit={code}; log={log}. Recover transaction before retry.")
+                time.sleep(attempt + 1)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def local_package_downloader(directory):
+    directory = Path(directory)
+    require(directory.is_absolute(), "Local package directory must be absolute.")
+    require(directory.is_dir() and all(not p.is_symlink() for p in [directory, *directory.parents]),
+            "Local package directory must be a real directory without symlink components.")
+
+    def copy(package, target):
+        package_identity(package)
+        source = directory / (package["id"] + ".zip")
+        # Open relative to a pinned directory descriptor; never write into the source.
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            descriptor = os.open(source.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+            with os.fdopen(descriptor, "rb") as reader:
+                info = os.fstat(reader.fileno())
+                require(stat.S_ISREG(info.st_mode) and info.st_size <= PACKAGE_LIMIT, "Local package must be a bounded regular file.")
+                with target.open("xb") as writer:
+                    target.chmod(0o600)
+                    total = 0
+                    while chunk := reader.read(64 * 1024):
+                        total += len(chunk)
+                        require(total <= PACKAGE_LIMIT, "Local package exceeds size limit.")
+                        writer.write(chunk)
+            require(digest(target) == package["sha256"], f"stage=local-package package={package['id']}: SHA-256 mismatch.")
+        except OSError as error:
+            raise MigrationError(f"stage=local-package package={package['id']}: missing, linked or unreadable package; no network fallback.") from error
+        finally:
+            os.close(directory_fd)
+    return copy
+
+
+def mod_launcher_environment(game):
+    libraries = list(game.rglob("*doorstop*x64*.so"))
+    require(len(libraries) == 1, "Ambiguous Linux x64 Doorstop library selection.")
+    library = "./" + libraries[0].relative_to(game).as_posix()
+    directory = "./" + libraries[0].parent.relative_to(game).as_posix()
+    return ("export DOORSTOP_ENABLED=1\n"
+            "export DOORSTOP_TARGET_ASSEMBLY=./BepInEx/core/BepInEx.Preloader.dll\n"
+            f"export LD_PRELOAD={shlex.quote(library)}\n"
+            f'export LD_LIBRARY_PATH={shlex.quote(directory)}:"${{LD_LIBRARY_PATH:-}}"\n')
 
 
 def prepare_mods(stage, source, plan, build_id, downloader=download_package):
@@ -475,6 +558,7 @@ def prepare_mods(stage, source, plan, build_id, downloader=download_package):
     roots = []
     for index, package in enumerate(packages):
         archive = stage.parent / f"package-{index}.zip"
+        package_identity(package)
         downloader(package, archive)
         folder = stage.parent / f"package-{index}"
         folder.mkdir()
@@ -566,12 +650,61 @@ class Destination:
         self.run(["bash", "-c", "set +x; source /usr/local/libexec/valheim-config; valheim_validate"],
                  env={**os.environ, **values}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    @contextmanager
+    def migration_operation(self):
+        # Serialize staging and recovery as well as activation; recursive rollback reuses the lease.
+        if getattr(self, "_migration_busy", False):
+            yield
+            return
+        self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        require(not self.state.is_symlink() and self.state.stat().st_uid == os.geteuid() and
+                self.state.stat().st_mode & 0o777 == 0o700, "Migration state must be root-owned mode 0700.")
+        descriptor = os.open(self.state / ".operation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "a") as mutex:
+            try:
+                fcntl.flock(mutex, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise MigrationError("Another migration/recovery is running; no changes made.") from error
+            self._migration_busy = True
+            try:
+                yield
+            finally:
+                self._migration_busy = False
+
     def rollback(self, transaction):
+        with self.migration_operation():
+            return self._recover(transaction)
+
+    def _recover(self, transaction):
         journal_path = transaction / "journal.json"
+        require(transaction.parent == self.state and re.fullmatch(r"[0-9a-f]{24}", transaction.name) and
+                not transaction.is_symlink() and not journal_path.is_symlink(), "Unsafe transaction location.")
+        require(all(not (transaction / name).is_symlink() for name in ("old", "after")), "Unsafe recovery directories.")
         journal = json.loads(journal_path.read_text())
+        allowed = {"game": "opt/valheim", "saves": "var/lib/valheim/saves", "server.conf": "etc/valheim/server.conf",
+                   "valheim-launch": "usr/local/libexec/valheim-launch", "mod-lock.json": "etc/valheim/mod-lock.json"}
+        require(journal.get("status") in {"staging", "staging-failed", "activating", "committed", "rolled-back"} and
+                isinstance(journal.get("slots"), list) and len(journal["slots"]) <= len(allowed), "Invalid recovery journal.")
+        require(all(isinstance(slot, dict) and slot.get("name") in allowed and allowed[slot["name"]] == slot.get("target") and
+                    type(slot.get("had_old")) is bool and slot.get("intent") is True for slot in journal["slots"]) and
+                len({slot["name"] for slot in journal["slots"]}) == len(journal["slots"]), "Unsafe recovery slots.")
+        if journal["status"] in {"staging", "staging-failed"}:
+            require(not journal["slots"] and not journal.get("fingerprints") and
+                    not any((transaction / "old").iterdir()) and not self.path("etc/valheim/maintenance").exists(),
+                    "Staging recovery found activation evidence; manual inspection required.")
+            lock_directory = self.path("run/valheim-management")
+            lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with (lock_directory / "operation.lock").open("a") as mutex:
+                fcntl.flock(mutex, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                journal["status"] = "rolled-back"
+                write_json(journal_path, journal)
+            print("Staging-only transaction recovered. No services or production paths changed; logs and staged files retained.")
+            return
         if journal["status"] == "rolled-back":
             print("Transaction already rolled back; no changes made.")
             return
+        require(all(not (transaction / "old" / slot["name"]).is_symlink() and
+                    not self.path(slot["target"]).is_symlink() for slot in journal["slots"]), "Unsafe recovery path.")
         self.run([self.cli, "stop"])
         lock_directory = self.path("run/valheim-management")
         lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -600,7 +733,11 @@ class Destination:
         self.path("etc/valheim/maintenance").unlink(missing_ok=True)
         print("Previous destination restored and left stopped. Review before valheim start. Original source VM was not modified.")
 
-    def apply(self, source, settings, archive_hash, plan, password, start=False):
+    def apply(self, source, settings, archive_hash, plan, password, start=False, mod_package_dir=None):
+        with self.migration_operation():
+            return self._apply(source, settings, archive_hash, plan, password, start, mod_package_dir)
+
+    def _apply(self, source, settings, archive_hash, plan, password, start=False, mod_package_dir=None):
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         require(not self.state.is_symlink() and self.state.stat().st_uid == os.geteuid() and self.state.stat().st_mode & 0o777 == 0o700, "Migration state must be root-owned mode 0700.")
         base_identity = hashlib.sha256((archive_hash + json.dumps(plan, sort_keys=True)).encode()).hexdigest()[:24]
@@ -624,49 +761,65 @@ class Destination:
         transaction.mkdir(mode=0o700)
         print("Staging migration transaction:", identity)
         # Preserve every imported file, including disabled plugins and original loader config.
-        shutil.copytree(source, transaction / "quarantine")
         old = transaction / "old"
         old.mkdir()
-        journal = {"status": "staging", "slots": [], "fingerprints": {}, "archive_sha256": archive_hash}
+        journal = {"status": "staging", "slots": [], "fingerprints": {}, "archive_sha256": archive_hash, "stage": "steamcmd"}
         write_json(journal_path, journal)
         work = self.path("opt/.valheim-migration-" + identity)
-        work.mkdir(mode=0o711)
-        work.chmod(0o711)  # The private process umask must not block SteamCMD's account.
-        game = work / "game"
-        build = self.fresh_game(game)
-        modded = prepare_mods(game, source, plan, build)
-        saves = transaction / "saves"
-        shutil.copytree(source / "saves", saves)
-        values = dict(line.split("=", 1) for line in self.path("etc/valheim/server.conf").read_text().splitlines() if line and not line.startswith("#"))
-        values.update(settings["config"])
-        values.update(server_password=password, auto_update="0")
-        self.validate_config(values)
-        config = transaction / "server.conf"
-        config.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
-        launcher = transaction / "valheim-launch"
-        original = self.path("usr/local/libexec/valheim-launch").read_text()
-        require(original.count('exec ./valheim_server.x86_64 "${args[@]}"') == 1, "Unsupported/custom launcher; retain it and review its settings explicitly.")
-        require(not re.search(r"-(?:preset|modifier|setkey)\b", original), "Destination launcher already has custom world rules; preserve it and reset/review those rules before migration.")
-        extra = "args+=(" + " ".join(shlex.quote(x) for x in settings["arguments"]) + ")\n" if settings["arguments"] else ""
-        command = 'exec ./start_game_bepinex.sh ./valheim_server.x86_64 "${args[@]}"' if modded else 'exec ./valheim_server.x86_64 "${args[@]}"'
-        launcher.write_text(original.replace('exec ./valheim_server.x86_64 "${args[@]}"', extra + command))
-        self.run(["bash", "-n", str(launcher)])
-        lock = transaction / "mod-lock.json"
-        write_json(lock, {"archive_sha256": archive_hash, "build_id": build, "modded": modded,
-                          "plan": plan, "files": {str(p.relative_to(game)): digest(p) for p in tree_files(game) if "BepInEx" in p.parts or p.name == "start_game_bepinex.sh"}})
-        self.ownership(game, True)
-        self.ownership(saves, True)
-        self.ownership(config)
-        self.ownership(launcher)
-        self.ownership(lock)
-        require(all(self.path(name).parent.stat().st_dev == transaction.stat().st_dev for name in
-                    ("opt/valheim", "var/lib/valheim/saves", "etc/valheim/server.conf", "usr/local/libexec/valheim-launch")),
-                "Atomic migration requires destination paths on the same filesystem; bind mounts need an operator-led migration.")
-        require(not any(os.path.ismount(self.path(name)) for name in ("opt/valheim", "var/lib/valheim/saves")),
-                "Migration refuses destination game/save mount points.")
-        # CLI owns consistent destination backups and graceful service control.
-        self.run([self.cli, "backup"])
-        self.run([self.cli, "stop"])
+        try:
+            shutil.copytree(source, transaction / "quarantine")
+            work.mkdir(mode=0o711)
+            work.chmod(0o711)  # The private process umask must not block SteamCMD's account.
+            game = work / "game"
+            build = self.fresh_game(game)
+            journal["stage"] = "mod-packages"
+            write_json(journal_path, journal)
+            downloader = local_package_downloader(mod_package_dir) if mod_package_dir is not None else download_package
+            modded = prepare_mods(game, source, plan, build, downloader)
+            journal["stage"] = "configuration"
+            write_json(journal_path, journal)
+            saves = transaction / "saves"
+            shutil.copytree(source / "saves", saves)
+            values = dict(line.split("=", 1) for line in self.path("etc/valheim/server.conf").read_text().splitlines() if line and not line.startswith("#"))
+            values.update(settings["config"])
+            values.update(server_password=password, auto_update="0")
+            self.validate_config(values)
+            config = transaction / "server.conf"
+            config.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+            launcher = transaction / "valheim-launch"
+            original = self.path("usr/local/libexec/valheim-launch").read_text()
+            require(original.count('exec ./valheim_server.x86_64 "${args[@]}"') == 1, "Unsupported/custom launcher; retain it and review its settings explicitly.")
+            require(not re.search(r"-(?:preset|modifier|setkey)\b", original), "Destination launcher already has custom world rules; preserve it and reset/review those rules before migration.")
+            extra = "args+=(" + " ".join(shlex.quote(x) for x in settings["arguments"]) + ")\n" if settings["arguments"] else ""
+            command = (mod_launcher_environment(game) if modded else "") + 'exec ./valheim_server.x86_64 "${args[@]}"'
+            launcher.write_text(original.replace('exec ./valheim_server.x86_64 "${args[@]}"', extra + command))
+            self.run(["bash", "-n", str(launcher)])
+            lock = transaction / "mod-lock.json"
+            write_json(lock, {"archive_sha256": archive_hash, "build_id": build, "modded": modded,
+                              "plan": plan, "files": {str(p.relative_to(game)): digest(p) for p in tree_files(game) if "BepInEx" in p.parts or p.name == "start_game_bepinex.sh"}})
+            self.ownership(game, True)
+            self.ownership(saves, True)
+            self.ownership(config)
+            self.ownership(launcher)
+            self.ownership(lock)
+            require(all(self.path(name).parent.stat().st_dev == transaction.stat().st_dev for name in
+                        ("opt/valheim", "var/lib/valheim/saves", "etc/valheim/server.conf", "usr/local/libexec/valheim-launch")),
+                    "Atomic migration requires destination paths on the same filesystem; bind mounts need an operator-led migration.")
+            require(not any(os.path.ismount(self.path(name)) for name in ("opt/valheim", "var/lib/valheim/saves")),
+                    "Migration refuses destination game/save mount points.")
+            journal["stage"] = "destination-backup-stop"
+            write_json(journal_path, journal)
+            # CLI owns consistent destination backups and graceful service control.
+            self.run([self.cli, "backup"])
+            self.run([self.cli, "stop"])
+        except BaseException as error:
+            journal["status"] = "staging-failed"
+            journal["error"] = str(error) if isinstance(error, MigrationError) else type(error).__name__
+            write_json(journal_path, journal)
+            for log in work.glob("*.log"):
+                shutil.copyfile(log, transaction / log.name)
+                (transaction / log.name).chmod(0o600)
+            raise MigrationError(f"Transaction {identity} failed at stage={journal['stage']}: {journal['error']}. Logs retained in {transaction}; run valheim migrate rollback {identity} before retry.") from error
         lock_directory = self.path("run/valheim-management")
         lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         with (lock_directory / "operation.lock").open("a") as mutex:
@@ -753,6 +906,7 @@ def main():
     importer.add_argument("--ssh-port", type=int, default=22)
     importer.add_argument("--sha256", required=True)
     importer.add_argument("--mod-plan")
+    importer.add_argument("--mod-package-dir", help="Read local <owner>-<name>-<version>.zip packages; never fall back to network")
     importer.add_argument("--dry-run", action="store_true")
     importer.add_argument("--start", action="store_true", help="Start destination only after successful commit; coordinate source cutover first")
     rollback = sub.add_parser("rollback", help="Restore retained destination state; leaves destination stopped")
@@ -783,13 +937,20 @@ def main():
                           "gameplay_arguments": settings["arguments"], "plugins_quarantined": inventory,
                           "configuration_files": len(list(tree_files(source / "bepinex-config"))) if (source / "bepinex-config").exists() else 0}, indent=2))
         if args.dry_run:
+            if args.mod_package_dir is not None:
+                require(args.mod_plan, "--mod-package-dir dry-run requires a reviewed --mod-plan.")
+                plan = json.loads(Path(args.mod_plan).read_text())
+                game = folder / "checked-game"
+                game.mkdir()
+                prepare_mods(game, source, plan, plan["tested_valheim_build_id"], local_package_downloader(args.mod_package_dir))
+                print("Local packages verified in temporary storage; fresh Steam build compatibility still requires import-time verification.")
             print("Dry run: no services, destination files, packages or passwords changed. Mod compatibility is not yet established.")
             return
         require(sys.stdin.isatty(), "A terminal is required for a replacement password; secrets are never accepted on the command line.")
         password = getpass.getpass("Replacement server password (never import the old password): ")
         require(password == getpass.getpass("Confirm replacement password: "), "Passwords do not match.")
         plan = json.loads(Path(args.mod_plan).read_text()) if args.mod_plan else None
-        destination.apply(source, settings, args.sha256, plan, password, args.start)
+        destination.apply(source, settings, args.sha256, plan, password, args.start, mod_package_dir=args.mod_package_dir)
 
 
 if __name__ == "__main__":

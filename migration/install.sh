@@ -11,7 +11,7 @@ set -euo pipefail
   exit 1
 }
 cd "$(dirname "${BASH_SOURCE[0]}")"
-apt install -y python3 openssh-client
+apt install -y python3 openssh-client curl ca-certificates
 install -d -o root -g root -m 0700 /run/valheim-management
 exec 9>/run/valheim-management/operation.lock
 flock -n 9 || { echo "Another Valheim operation is running." >&2; exit 1; }

@@ -85,8 +85,8 @@ admin/access lists and maintenance choices, see the
 choices to the owner; examples are not applied automatically.
 
 Moving an existing Linux server? The optional [VM-to-LXC migration guide](docs/migration.md)
-covers stopped-source snapshots, SSH/local imports, reviewed BepInEx/plugins and
-rollback. It is a separate add-on; fresh installs remain vanilla and do not
+covers stopped-source snapshots, SSH/local imports, reviewed BepInEx/plugins,
+curl downloads or offline `--mod-package-dir` packages, and staging recovery/rollback. It is a separate add-on; fresh installs remain vanilla and do not
 automatically connect to or alter an existing VM.
 
 Edit `/etc/valheim/server.conf` as root, then run `valheim check-config` and
