@@ -23,6 +23,7 @@ import zipfile
 
 LIMIT = 32 * 1024**3
 FILE_LIMIT = 100000
+CHUNKED_WORLD_VERSIONS = frozenset({40, 41, 42})
 SOURCE_DEFAULTS = {"port": "2456", "public": "1", "crossplay": "0", "saveinterval": "1800",
                    "world_backups": "4", "backupshort": "7200", "backuplong": "43200"}
 VALUES = {"combat": {"veryeasy", "easy", "hard", "veryhard"},
@@ -321,7 +322,7 @@ def validate_chunked_world(directory):
             return data
         version = struct.unpack("<i", header(".db2", 4))[0]
         frame_size, metadata_version = struct.unpack("<ii", header(".fwl2", 8))
-        require(version in {40, 41} and metadata_version == version and frame_size >= 4 and
+        require(version in CHUNKED_WORLD_VERSIONS and metadata_version == version and frame_size >= 4 and
                 frame_size == Path(str(stem) + ".fwl2").stat().st_size - 4,
                 "Unsupported or inconsistent chunked-world metadata version/length.")
         require(Path(str(stem) + ".ok").stat().st_size == 4 and
@@ -330,8 +331,9 @@ def validate_chunked_world(directory):
         index = Path(str(stem) + ".chunks")
         require(10 <= index.stat().st_size <= 10 + 11 * FILE_LIMIT, "Invalid chunk index size.")
         data = index.read_bytes()
+        # Exact framing rejects changed index layouts; never infer entries from file size alone.
         map_version, total, count = struct.unpack_from("<Hii", data)
-        require(map_version in {40, 41} and 0 <= count <= FILE_LIMIT and total >= 0 and
+        require(map_version == version and 0 <= count <= FILE_LIMIT and total >= 0 and
                 len(data) == 10 + count * 11, "Malformed or unsupported chunk index.")
         seen, objects = set(), 0
         for offset in range(10, len(data), 11):
@@ -344,7 +346,8 @@ def validate_chunked_world(directory):
             require(chunk.is_file() and chunk.stat().st_size >= 6, "Required world chunk is missing or truncated.")
             with chunk.open("rb") as stream:
                 chunk_version, chunk_count = struct.unpack("<hi", stream.read(6))
-            require(chunk_version in {40, 41} and chunk_count == number and
+            # Unchanged chunks may predate the main save; newer chunks cannot belong to it.
+            require(chunk_version in CHUNKED_WORLD_VERSIONS and chunk_version <= version and chunk_count == number and
                     (number == 0 or chunk.stat().st_size > 6), "Chunk header disagrees with snapshot index.")
             objects += number
         require(objects == total, "Chunk index object totals disagree.")

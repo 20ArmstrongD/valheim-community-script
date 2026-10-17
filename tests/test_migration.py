@@ -95,7 +95,7 @@ class MigrationTests(unittest.TestCase):
                 archive.add(path, arcname=str(path.relative_to(self.source)), recursive=False)
         return output
 
-    def chunked(self, generation=1804, world="Current", folder="worlds_local"):
+    def chunked(self, generation=1804, world="Current", folder="worlds_local", version=41):
         parent = self.source / "saves" / folder
         for suffix in (".db", ".fwl"):
             (parent / (world + suffix)).unlink(missing_ok=True)
@@ -103,16 +103,16 @@ class MigrationTests(unittest.TestCase):
         directory.mkdir(parents=True, exist_ok=True)
         stem = directory / f"_main.{generation}"
         # Synthetic binary headers/index; opaque payloads are not game fixtures.
-        Path(str(stem) + ".db2").write_bytes(struct.pack("<id", 41, 12.5) + b"opaque-db")
-        payload = struct.pack("<i", 41) + b"opaque-metadata"
+        Path(str(stem) + ".db2").write_bytes(struct.pack("<id", version, 12.5) + b"opaque-db")
+        payload = struct.pack("<i", version) + b"opaque-metadata"
         Path(str(stem) + ".fwl2").write_bytes(struct.pack("<i", len(payload)) + payload)
-        Path(str(stem) + ".ok").write_bytes(struct.pack("<i", 41))
+        Path(str(stem) + ".ok").write_bytes(struct.pack("<i", version))
         entries = [(0x2020, 0, 15, 1), (1, 0, 3, 0)]
-        Path(str(stem) + ".chunks").write_bytes(struct.pack("<Hii", 41, 1, 2) +
+        Path(str(stem) + ".chunks").write_bytes(struct.pack("<Hii", version, 1, 2) +
                                                 b"".join(struct.pack("<HBIi", *entry) for entry in entries))
         for coordinate, size, revision, count in entries:
             name = f"{coordinate >> 8:02x}_{coordinate & 255:02x}__{size}_{revision}.chunk"
-            (directory / name).write_bytes(struct.pack("<hi", 41, count) + (b"opaque-object" if count else b""))
+            (directory / name).write_bytes(struct.pack("<hi", version, count) + (b"opaque-object" if count else b""))
         return directory
 
     def unpack_fixture(self):
@@ -121,6 +121,72 @@ class MigrationTests(unittest.TestCase):
         output = Path(tempfile.mkdtemp(dir=self.root))
         m.unpack(archive, output, m.digest(archive))
         return output
+
+    def test_chunked_supported_versions_preserve_bytes(self):
+        for version in (40, 41, 42):
+            directory = self.chunked(version=version)
+            before = {p.name: p.read_bytes() for p in directory.iterdir()}
+            output = self.unpack_fixture() / "saves/worlds_local/Current"
+            self.assertEqual(before, {p.name: p.read_bytes() for p in output.iterdir()})
+
+    def test_version42_reported_framing(self):
+        directory = self.chunked(generation=1808, version=42)
+        payload = struct.pack("<i", 42) + bytes(2486)
+        (directory / "_main.1808.fwl2").write_bytes(struct.pack("<i", 2490) + payload)
+        entries = [(0x2020 + i, 0, i + 1, 0) for i in range(32)]
+        index = struct.pack("<Hii", 42, 0, 32) + b"".join(struct.pack("<HBIi", *entry) for entry in entries)
+        self.assertEqual(len(index), 362)
+        (directory / "_main.1808.chunks").write_bytes(index)
+        for coordinate, size, revision, count in entries:
+            (directory / f"{coordinate >> 8:02x}_{coordinate & 255:02x}__{size}_{revision}.chunk").write_bytes(struct.pack("<hi", 42, count))
+        self.unpack_fixture()
+
+    def test_version42_mismatched_versions_refused(self):
+        directory = self.chunked(version=42)
+        for name, offset, fmt, versions in (
+                ("_main.1804.fwl2", 4, "<i", (40, 41, 43)),
+                ("_main.1804.ok", 0, "<i", (40, 41, 43)),
+                ("_main.1804.chunks", 0, "<H", (40, 41, 43)),
+                ("20_20__0_15.chunk", 0, "<h", (39, 43))):
+            path = directory / name
+            original = path.read_bytes()
+            for version in versions:
+                changed = bytearray(original)
+                struct.pack_into(fmt, changed, offset, version)
+                path.write_bytes(changed)
+                with self.subTest(name=name, version=version), self.assertRaises(m.MigrationError):
+                    self.unpack_fixture()
+            path.write_bytes(original)
+
+    def test_older_unchanged_chunks_allowed_but_future_chunks_refused(self):
+        directory = self.chunked(version=42)
+        chunk = directory / "20_20__0_15.chunk"
+        original = chunk.read_bytes()
+        for version in (40, 41):
+            chunk.write_bytes(struct.pack("<h", version) + original[2:])
+            self.unpack_fixture()
+        self.chunked(version=41)
+        chunk.write_bytes(original)
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+
+    def test_version42_changed_layouts_and_missing_chunks_refused(self):
+        directory = self.chunked(version=42)
+        index = directory / "_main.1804.chunks"
+        original = index.read_bytes()
+        for data in (original[:-1], original + b"extra", original[:6] + struct.pack("<i", 32) + original[10:]):
+            index.write_bytes(data)
+            with self.assertRaises(m.MigrationError):
+                self.unpack_fixture()
+        index.write_bytes(original)
+        chunk = directory / "20_20__0_15.chunk"
+        for data in (b"", struct.pack("<hi", 42, 99)):
+            chunk.write_bytes(data)
+            with self.assertRaises(m.MigrationError):
+                self.unpack_fixture()
+        chunk.unlink()
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
 
     def test_chunked_generations_backups_and_bytes_preserved(self):
         self.chunked()

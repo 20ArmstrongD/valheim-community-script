@@ -46,8 +46,15 @@ main generation: unchanged chunks can have older revision numbers.
 
 Every generation present in the selected directory must have all four matching
 metadata files, including the completion marker. Validation checks supported
-world/header versions (40 and 41), metadata framing, index lengths and totals,
-unique chunk identities, exact referenced filenames, and chunk header counts.
+world/header versions (40, 41 and 42), metadata framing, index lengths and totals,
+unique chunk identities, exact referenced filenames, and chunk header counts. The
+`.db2`, `.fwl2`, `.ok` and index versions must agree. Referenced chunks may use an
+older supported version (unchanged chunks survive saves), but never a newer one.
+Version 42 uses the existing validator's strict 10-byte index header, 11-byte
+entries and 6-byte chunk header checks. The reported 362-byte index fits 32
+entries, but size alone is not proof of layout compatibility. Version-42 tests
+are synthetic: real index-entry and chunk-header compatibility has not yet been
+independently confirmed. No object payload parsing or conversion is introduced.
 It does not deserialize every game object or prove that Valheim can load its
 opaque payloads; test the imported world before allowing players to connect.
 The binary layout reference is the [fejdit format implementation](https://github.com/community-valheim-tools/fejdit/blob/main/src/format/chunked.rs).
