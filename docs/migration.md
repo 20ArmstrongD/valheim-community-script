@@ -88,7 +88,7 @@ bash migration/install.sh
 valheim migrate --help
 ```
 
-The add-on explicitly installs Python 3 and the OpenSSH client, copies the
+The add-on explicitly installs Python 3, the OpenSSH client, curl and CA certificates, copies the
 standalone migration module/hooks, and enables the `valheim migrate` dispatch in
 older copies of the management CLI. It does not migrate data or stop the game.
 An existing CLI is saved as `/usr/local/libexec/valheim-before-migration` before
@@ -317,6 +317,73 @@ provided configuration/launcher/lock and recorded executable-code fingerprints
 still match. Drift or an
 incomplete transaction requires explicit review instead of overwriting new data.
 
+## Package downloads: automatic or local
+
+Automatic HTTPS downloads remain the default. curl follows only HTTPS redirects,
+verifies TLS, fails on HTTP errors, allows five redirects, uses a 15-second connect
+timeout and a 120-second transfer timeout per attempt, and makes at most three
+attempts for transient failures with short backoff. HTTP 403/404 fail immediately.
+A streaming limit enforces 128 MiB even when Content-Length is absent. Partial
+files are removed; only a complete download matching the reviewed SHA-256 becomes
+an input to ZIP validation. curl's user configuration is disabled. Missing curl
+fails safely; the add-on installer supplies it. See the [curl manual](https://curl.se/docs/manpage.html).
+
+To use previously reviewed downloads, supply `--mod-package-dir DIRECTORY`.
+The directory must be an absolute real path with no symlink components. Each file
+must be a regular, non-symlink file named **exactly `<package-id>.zip`**, where the
+ID matches the reviewed plan, including case, owner, name and version. The importer
+only reads that directory, copies bounded files into private staging, then checks
+hashes, ZIP paths/types, manifests, dependencies and approved DLLs. Missing or
+mismatched files fail; **there is no network fallback**. Additional files are ignored.
+The package source is never renamed, chmodded or overwritten (ordinary reads may
+update filesystem access times).
+
+For the previously reviewed pair, create a separate package directory inside the
+**destination LXC**, leaving the original ZIPs untouched:
+
+```bash
+install -d -m 0700 /root/valheim-mod-review/packages
+cp -n /root/valheim-mod-review/bepinex.zip /root/valheim-mod-review/packages/denikson-BepInExPack_Valheim-5.4.2351.zip
+cp -n /root/valheim-mod-review/serverdevcommands.zip /root/valheim-mod-review/packages/JereKuusela-Server_devcommands-1.115.0.zip
+sha256sum /root/valheim-mod-review/packages/*.zip
+```
+
+The owner-reported SHA-256 values are:
+
+| Package | SHA-256 |
+| --- | --- |
+| denikson-BepInExPack_Valheim-5.4.2351 | `bce631497976a93977ceb08e166712e6c31d15244956f89f17df092a9b62e29f` |
+| JereKuusela-Server_devcommands-1.115.0 | `b2752c18342bc9cabf4734e3480cd2cc4aa9faa8955ba503d4f7cefcfa3e4b33` |
+
+These public package hashes are reference values, not automatic approval. The
+reviewed plan must still contain the tested Steam build ID, compatibility and
+review approvals, exact assembly path, fresh DLL hash and source DLL hash.
+The owner reported an isolated successful run of build `25909431` with this pair;
+that result does not approve future Steam builds. The existing intentionally
+unapproved template remains unchanged.
+
+Use your actual snapshot path, its trusted checksum and the existing reviewed
+plan (the paths below are examples). Dry-run validates local packages in temporary
+storage without changing destination files/services or asking for a password.
+It cannot verify the latest Steam build without an actual staged import.
+
+```bash
+valheim migrate import --archive /root/valheim-snapshot.tar.gz --sha256 EXPECTED_SHA256 --mod-plan /root/reviewed-mod-plan.json --mod-package-dir /root/valheim-mod-review/packages --dry-run
+valheim migrate import --archive /root/valheim-snapshot.tar.gz --sha256 EXPECTED_SHA256 --mod-plan /root/reviewed-mod-plan.json --mod-package-dir /root/valheim-mod-review/packages
+```
+
+For automatic downloads, omit `--mod-package-dir` from the second command. The
+ordinary dry-run without local packages continues to inspect only the snapshot.
+Neither example starts the service.
+
+The production launcher exports `DOORSTOP_ENABLED=1` and
+`DOORSTOP_TARGET_ASSEMBLY=./BepInEx/core/BepInEx.Preloader.dll`. It loads the single
+validated x64 Doorstop `.so` through `LD_PRELOAD` and prepends its directory to
+`LD_LIBRARY_PATH`, retaining the baseline game's library path. It executes the
+fresh game directly to avoid wrapper scripts resetting those values. No source
+loader environment is trusted. The service unit is unchanged; the prior launcher
+and full destination game tree are retained for rollback.
+
 ## Recovery and rollback
 
 Do not delete transaction directories or remove a maintenance marker to force an
@@ -328,13 +395,48 @@ or power interruption can require the explicit recovery command:
 valheim migrate rollback TRANSACTION_ID
 ```
 
-Use the printed 24-character hexadecimal ID. Rollback uses the CLI's safe stop,
+Use the printed 24-character hexadecimal ID. For activation/committed transactions,
+rollback uses the CLI's safe stop,
 takes the management lock and restores recorded prior game/saves/configuration,
 launcher and migration lock. Displaced post-import state is retained under
 `after/`, not deleted. It leaves the destination stopped for inspection and is
 idempotent. Review and use `valheim start` only when satisfied. A rollback can
 return the destination to older world progress; preserve any wanted later progress
 from `after/` before further changes. The original VM is never changed by rollback.
+
+### Failure before activation, including earlier importer versions
+
+For a journal with `status` of `staging` or `staging-failed`, empty `slots` and
+`fingerprints`, an empty `old/`, and no maintenance marker, recovery validates
+those conditions, acquires locks and marks the transaction `rolled-back`.
+**It does not stop/start the service, move production data or delete staged data.**
+This also handles older interrupted staging journals. Unexpected activation
+evidence or unsafe paths cause refusal and require inspection instead of guesses.
+
+For the reported download failure, after installing the reviewed fix inside the
+LXC, inspect and recover with:
+
+```bash
+python3 -m json.tool /var/lib/valheim-migration/b6672bfdf7a05ef785d08920/journal.json
+systemctl is-active valheim.service || true
+ls -l /etc/valheim/maintenance
+valheim migrate rollback b6672bfdf7a05ef785d08920
+```
+
+An absent maintenance file is expected for this staging-only case. These commands
+are operator instructions, not actions performed during development. If any
+recorded condition differs, recovery refuses; do not remove markers/journals or
+manually rename/delete production paths. A currently running import/recovery holds
+a separate migration lease, so a second recovery cannot invalidate its journal.
+
+New failures report stage, package ID, fixed download URL, HTTP status (or `000`/
+`unknown` for connection failures) and curl exit code. Protected `*.download.log`
+files and `steamcmd.log` remain in staging and are copied into the transaction
+when a caught staging failure occurs. Forced termination may leave logs only in
+`/opt/.valheim-migration-ID/`. Do not publish unreviewed logs/configs. A failed or
+interrupted attempt blocks same-input retries until recovery. Once recovered,
+rerunning the import uses a new transaction ID and retains earlier evidence.
+No recovery path automatically starts the service.
 
 If rollback cannot obtain the lock or the game will not stop, resolve the reported
 condition before retrying. Protected `journal.json`, the `old/`, `after/` and

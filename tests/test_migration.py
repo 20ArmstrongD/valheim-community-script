@@ -462,7 +462,7 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(m.MigrationError):
             m.package_zip(path, m.digest(path), self.root / "expanded")
 
-    def test_reviewed_fresh_mod_packages_enable_only_approved_assemblies(self):
+    def reviewed_mod_fixture(self):
         (self.source / "plugins").mkdir()
         imported = self.source / "plugins/FixtureAdmin.dll"
         imported.write_bytes(dll() + b"older-version")
@@ -498,6 +498,12 @@ class MigrationTests(unittest.TestCase):
         plan = {"tested_valheim_build_id": "12345", "compatibility_confirmed": True, "bepinex": records[0], "plugins": [records[1]]}
         game = self.root / "fresh"
         game.mkdir()
+
+        return game, plan, archives, contents
+
+    def test_reviewed_fresh_mod_packages_enable_only_approved_assemblies(self):
+        game, plan, archives, contents = self.reviewed_mod_fixture()
+        plugin_id = plan["plugins"][0]["id"]
 
         def download(package, target):
             shutil.copyfile(archives[package["id"]], target)
