@@ -95,6 +95,151 @@ class MigrationTests(unittest.TestCase):
                 archive.add(path, arcname=str(path.relative_to(self.source)), recursive=False)
         return output
 
+    def chunked(self, generation=1804, world="Current", folder="worlds_local"):
+        parent = self.source / "saves" / folder
+        for suffix in (".db", ".fwl"):
+            (parent / (world + suffix)).unlink(missing_ok=True)
+        directory = parent / world
+        directory.mkdir(parents=True, exist_ok=True)
+        stem = directory / f"_main.{generation}"
+        # Synthetic binary headers/index; opaque payloads are not game fixtures.
+        Path(str(stem) + ".db2").write_bytes(struct.pack("<id", 41, 12.5) + b"opaque-db")
+        payload = struct.pack("<i", 41) + b"opaque-metadata"
+        Path(str(stem) + ".fwl2").write_bytes(struct.pack("<i", len(payload)) + payload)
+        Path(str(stem) + ".ok").write_bytes(struct.pack("<i", 41))
+        entries = [(0x2020, 0, 15, 1), (1, 0, 3, 0)]
+        Path(str(stem) + ".chunks").write_bytes(struct.pack("<Hii", 41, 1, 2) +
+                                                b"".join(struct.pack("<HBIi", *entry) for entry in entries))
+        for coordinate, size, revision, count in entries:
+            name = f"{coordinate >> 8:02x}_{coordinate & 255:02x}__{size}_{revision}.chunk"
+            (directory / name).write_bytes(struct.pack("<hi", 41, count) + (b"opaque-object" if count else b""))
+        return directory
+
+    def unpack_fixture(self):
+        (self.source / "manifest.json").unlink(missing_ok=True)
+        archive = self.archive()
+        output = Path(tempfile.mkdtemp(dir=self.root))
+        m.unpack(archive, output, m.digest(archive))
+        return output
+
+    def test_chunked_generations_backups_and_bytes_preserved(self):
+        self.chunked()
+        self.chunked(1803)
+        self.chunked(40, "Current_backup_auto-20261017")
+        output = self.unpack_fixture()
+        for path in m.tree_files(self.source / "saves"):
+            self.assertEqual(path.read_bytes(), (output / path.relative_to(self.source)).read_bytes())
+
+    def test_chunked_world_selected_from_settings(self):
+        self.chunked(world="OtherWorld")
+        settings = json.loads((self.source / "settings.json").read_text())
+        settings["config"]["world_name"] = "OtherWorld"
+        m.write_json(self.source / "settings.json", settings)
+        self.unpack_fixture()
+
+    def test_chunked_backup_cannot_replace_active_world(self):
+        self.chunked(world="Current_backup_auto-20261017")
+        for suffix in (".db", ".fwl"):
+            (self.source / "saves/worlds_local" / ("Current" + suffix)).unlink()
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+
+    def test_chunked_missing_metadata_or_chunks_refused(self):
+        directory = self.chunked()
+        for name in ("_main.1804.db2", "_main.1804.fwl2", "_main.1804.chunks", "_main.1804.ok", "20_20__0_15.chunk"):
+            path = directory / name
+            contents = path.read_bytes()
+            path.unlink()
+            with self.subTest(name=name), self.assertRaises(m.MigrationError):
+                self.unpack_fixture()
+            path.write_bytes(contents)
+
+    def test_chunked_generations_cannot_be_combined(self):
+        directory = self.chunked()
+        (directory / "_main.1804.fwl2").rename(directory / "_main.1805.fwl2")
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+
+    def test_chunked_malformed_index_refused(self):
+        directory = self.chunked()
+        index = directory / "_main.1804.chunks"
+        good = index.read_bytes()
+        entry = good[10:21]
+        invalid = [b"", good[:-1], good + b"x", struct.pack("<Hii", 41, 1, -1),
+                   struct.pack("<Hii", 99, 1, 2) + good[10:],
+                   struct.pack("<Hii", 41, 999, 2) + good[10:],
+                   struct.pack("<Hii", 41, 2, 2) + entry * 2,
+                   struct.pack("<Hii", 41, 1, 1) + struct.pack("<HBIi", 0xffff, 4, 1, 1)]
+        for data in invalid:
+            index.write_bytes(data)
+            with self.subTest(data=data.hex()), self.assertRaises(m.MigrationError):
+                self.unpack_fixture()
+
+    def test_chunked_wrong_revision_and_header_refused(self):
+        directory = self.chunked()
+        chunk = directory / "20_20__0_15.chunk"
+        chunk.rename(directory / "20_20__0_14.chunk")
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+        chunk.write_bytes(struct.pack("<hi", 41, 2) + b"opaque")
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+
+    def test_chunked_malformed_names_versions_and_lengths_refused(self):
+        directory = self.chunked()
+        for name, data in (("_main.1804.db2", struct.pack("<i", 99)),
+                           ("_main.1804.fwl2", struct.pack("<ii", 100, 41)),
+                           ("_main.1804.ok", struct.pack("<i", 40)),
+                           ("_main.01804.db2", b"bad")):
+            path = directory / name
+            original = path.read_bytes() if path.exists() else None
+            path.write_bytes(data)
+            with self.subTest(name=name), self.assertRaises(m.MigrationError):
+                self.unpack_fixture()
+            if original is None:
+                path.unlink()
+            else:
+                path.write_bytes(original)
+
+    def test_chunked_mixed_and_multiple_save_roots_refused(self):
+        directory = self.chunked()
+        legacy = directory.parent / "Current.db"
+        legacy.write_bytes(b"old")
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+        legacy.unlink()
+        self.chunked(folder="worlds")
+        with self.assertRaises(m.MigrationError):
+            self.unpack_fixture()
+
+    def test_chunked_archive_integrity_still_required(self):
+        self.chunked()
+        archive = self.archive(lambda manifest: manifest["files"]["saves/worlds_local/Current/_main.1804.chunks"].update(sha256="0" * 64))
+        output = self.root / "invalid-extracted"
+        output.mkdir()
+        with self.assertRaisesRegex(m.MigrationError, "Manifest content mismatch"):
+            m.unpack(archive, output, m.digest(archive))
+
+    def test_chunked_invalid_dry_run_never_applies(self):
+        directory = self.chunked()
+        (directory / "20_20__0_15.chunk").unlink()
+        archive = self.archive()
+        argv = ["valheim-migrate", "import", "--archive", str(archive), "--sha256", m.digest(archive), "--dry-run"]
+        with mock.patch.object(m.sys, "argv", argv), mock.patch.object(m.os, "geteuid", return_value=0), \
+             mock.patch.object(m.subprocess, "run", return_value=argparse.Namespace(stdout="lxc")), \
+             mock.patch.object(m.Destination, "apply") as apply, mock.patch.object(m.getpass, "getpass") as password, \
+             self.assertRaises(m.MigrationError):
+            m.main()
+        apply.assert_not_called()
+        password.assert_not_called()
+
+    def test_chunked_dry_run_has_no_destination_side_effects(self):
+        self.chunked()
+        destination = self.destination()
+        before = {str(p): p.read_bytes() for p in m.tree_files(self.root / "destination")}
+        self.test_dry_run_has_no_destination_or_password_side_effects()
+        self.assertEqual(before, {str(p): p.read_bytes() for p in m.tree_files(self.root / "destination")})
+
     def destination(self):
         root = self.root / "destination"
         for name in ("etc/valheim", "usr/local/libexec", "opt/valheim", "var/lib/valheim/saves"):

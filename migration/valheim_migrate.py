@@ -294,6 +294,81 @@ def snapshot(args):
     print("Consistent migration snapshot created. Preserve its SHA-256 through a trusted channel:", checksum)
 
 
+def validate_chunked_world(directory):
+    """Validate generations and index references without interpreting/rebuilding saves.
+
+    Binary layout reference: community-valheim-tools/fejdit,
+    src/format/chunked.rs (ChunkMap, ChunkIndex and ChunkFile).
+    """
+    generations = {}
+    for path in directory.iterdir():
+        if path.name.startswith("_main."):
+            match = re.fullmatch(r"_main\.(0|[1-9][0-9]{0,9})\.(db2|fwl2|chunks|ok)", path.name)
+            require(match and path.is_file(), "Malformed chunked-world generation filename.")
+            generation, extension = match.groups()
+            require(int(generation) <= 0xffffffff, "Invalid chunked-world generation number.")
+            generations.setdefault(generation, set()).add(extension)
+        require(path.suffix not in {".db", ".fwl"}, "Mixed legacy files inside chunked world; review snapshot.")
+    require(generations, "Selected chunked world has no snapshot metadata.")
+    for generation, extensions in generations.items():
+        require(extensions == {"db2", "fwl2", "chunks", "ok"},
+                "Incomplete chunked-world generation; require matching .db2/.fwl2/.chunks/.ok files.")
+        stem = directory / ("_main." + generation)
+        def header(extension, length):
+            with Path(str(stem) + extension).open("rb") as stream:
+                data = stream.read(length)
+            require(len(data) == length, "Truncated chunked-world metadata.")
+            return data
+        version = struct.unpack("<i", header(".db2", 4))[0]
+        frame_size, metadata_version = struct.unpack("<ii", header(".fwl2", 8))
+        require(version in {40, 41} and metadata_version == version and frame_size >= 4 and
+                frame_size == Path(str(stem) + ".fwl2").stat().st_size - 4,
+                "Unsupported or inconsistent chunked-world metadata version/length.")
+        require(Path(str(stem) + ".ok").stat().st_size == 4 and
+                struct.unpack("<i", header(".ok", 4))[0] == version,
+                "Invalid chunked-world completion marker.")
+        index = Path(str(stem) + ".chunks")
+        require(10 <= index.stat().st_size <= 10 + 11 * FILE_LIMIT, "Invalid chunk index size.")
+        data = index.read_bytes()
+        map_version, total, count = struct.unpack_from("<Hii", data)
+        require(map_version in {40, 41} and 0 <= count <= FILE_LIMIT and total >= 0 and
+                len(data) == 10 + count * 11, "Malformed or unsupported chunk index.")
+        seen, objects = set(), 0
+        for offset in range(10, len(data), 11):
+            coordinate, size, revision, number = struct.unpack_from("<HBIi", data, offset)
+            x, y = coordinate & 255, coordinate >> 8
+            require(size <= 3 and x < 64 and y < 64 and x % (1 << size) == y % (1 << size) == 0 and
+                    (coordinate, size) not in seen and number >= 0, "Invalid or duplicate chunk index entry.")
+            seen.add((coordinate, size))
+            chunk = directory / f"{y:02x}_{x:02x}__{size}_{revision}.chunk"
+            require(chunk.is_file() and chunk.stat().st_size >= 6, "Required world chunk is missing or truncated.")
+            with chunk.open("rb") as stream:
+                chunk_version, chunk_count = struct.unpack("<hi", stream.read(6))
+            require(chunk_version in {40, 41} and chunk_count == number and
+                    (number == 0 or chunk.stat().st_size > 6), "Chunk header disagrees with snapshot index.")
+            objects += number
+        require(objects == total, "Chunk index object totals disagree.")
+
+
+def validate_selected_world(saves, world):
+    # Exact names only: backup directories must never stand in for the live world.
+    candidates = []
+    for folder in ("worlds_local", "worlds", "."):
+        parent = saves / folder
+        legacy = [parent / (world + extension) for extension in (".db", ".fwl")]
+        chunked = parent / world
+        if chunked.exists() or any(path.exists() for path in legacy):
+            candidates.append((chunked, legacy))
+    require(len(candidates) == 1, "Selected world is missing or ambiguous across save roots; review settings.json.")
+    chunked, legacy = candidates[0]
+    if chunked.exists():
+        require(chunked.is_dir() and not any(path.exists() for path in legacy),
+                "Mixed legacy and chunked selected world; explicitly review the active source before capture.")
+        validate_chunked_world(chunked)
+    else:
+        require(all(path.is_file() for path in legacy), "Selected world is missing a .db/.fwl pair.")
+
+
 def unpack(archive, destination, expected):
     require(re.fullmatch(r"[0-9a-f]{64}", expected or ""), "An expected SHA-256 from a trusted channel is required.")
     require(regular(archive) and Path(archive).stat().st_size <= LIMIT, "Archive is missing, linked or too large.")
@@ -324,10 +399,7 @@ def unpack(archive, destination, expected):
         path = destination / name
         require(record == {"sha256": digest(path), "size": path.stat().st_size}, "Manifest content mismatch.")
     settings = validate_settings(json.loads((destination / "settings.json").read_text()))
-    world = settings["config"]["world_name"]
-    require(any((destination / "saves" / folder / (world + ".db")).is_file() and
-                (destination / "saves" / folder / (world + ".fwl")).is_file() for folder in ("worlds_local", "worlds", ".")),
-            "Selected world is missing a .db/.fwl pair.")
+    validate_selected_world(destination / "saves", settings["config"]["world_name"])
     return settings
 
 

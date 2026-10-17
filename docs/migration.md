@@ -14,7 +14,8 @@ not been validated by the automated tests**. Rehearse with disposable copies fir
   an existing archive with strict host-key checking and key-based authentication;
   it does not perform remote shutdowns, install software, or run imported scripts.
 - Every world, world backup and access-list file under the chosen save root is
-  preserved. The selected world must contain its `.db` and `.fwl` pair.
+  preserved. The selected world must have a complete legacy file pair or a valid
+  chunked-world directory (see below).
 - Startup settings are parsed as data, never sourced or executed. The source
   game password is discarded. A terminal-only hidden prompt requests and confirms
   a replacement password; it is not accepted as a command-line option.
@@ -33,6 +34,42 @@ not been validated by the automated tests**. Rehearse with disposable copies fir
 - Successful imports remain stopped unless `--start` was explicitly selected.
   Automatic updates are disabled. A migration lock blocks ordinary game updates
   until the owner reviews compatibility and chooses how to maintain the new build.
+
+## Supported world save layouts
+
+The importer reads `config.world_name` from the verified `settings.json`. It checks
+that exact name under `saves/worlds_local`, `saves/worlds`, or the save root.
+Legacy `<world>.db` plus `<world>.fwl` pairs remain supported. Chunked saves use
+`<world>/_main.<generation>.db2`, `.fwl2`, `.chunks`, `.ok`, and the `.chunk` files
+referenced by the binary `.chunks` index. Chunk revisions are independent of the
+main generation: unchanged chunks can have older revision numbers.
+
+Every generation present in the selected directory must have all four matching
+metadata files, including the completion marker. Validation checks supported
+world/header versions (40 and 41), metadata framing, index lengths and totals,
+unique chunk identities, exact referenced filenames, and chunk header counts.
+It does not deserialize every game object or prove that Valheim can load its
+opaque payloads; test the imported world before allowing players to connect.
+The binary layout reference is the [fejdit format implementation](https://github.com/community-valheim-tools/fejdit/blob/main/src/format/chunked.rs).
+
+Backup folders such as `<world>_backup_auto-<timestamp>` are preserved, but never
+substituted for the active directory. All files and relative paths, including
+older generations, unused chunks, other worlds and backups, are copied unchanged.
+Only the selected world's layout is required to pass these additional checks;
+archive hashes and manifest verification still cover every retained file.
+
+The importer refuses incomplete generations, malformed indexes, missing chunks,
+multiple exact-name candidates across save roots, and coexisting legacy and
+chunked copies of the selected world. Converted worlds can retain a legacy pair;
+review which copy is active and prepare a separate consistent migration snapshot
+containing one unambiguous active layout. Keep the original export and source
+untouched. Never repair a snapshot by renaming generations, inventing `.ok`
+markers, or editing its index/manifest. Unsupported versions require an importer
+update or a separately reviewed recovery procedure.
+
+`import --dry-run` performs the same world validation in temporary storage,
+without changing destination saves, configuration or services. No conversion,
+renaming or rewriting of save data is performed during either dry-run or import.
 
 ## 1. Install the optional tools on the destination LXC
 
@@ -73,7 +110,7 @@ Alternative roots and additional retained worlds require no code change.
 For a planned cutover, ask players to disconnect and deliberately stop the source
 service during the agreed maintenance window. Stop any other writers or scripts
 that can change these saves, and prevent operators/automation from restarting
-the source during capture. Do not copy a running world's `.db` and `.fwl` pair.
+the source during capture. Do not copy a running world's files, including chunked-world directories.
 Do not assume that a storage snapshot taken while the game is running is
 application-consistent.
 
@@ -178,7 +215,7 @@ Establish host-key trust out of band and configure key/agent authentication
 first. SSH passwords are not command options and host-key checks are not bypassed.
 Remote archives are streamed read-only using the source's Python interpreter.
 
-Dry-run verifies the complete archive/manifest, selected world pair and translated
+Dry-run verifies the complete archive/manifest, selected world save layout and translated
 settings, and reports plugin hashes, gameplay flags and configuration-file count.
 It uses temporary extraction space but does not stop services, install packages,
 write destination configuration or prompt for a password. It does **not** claim
